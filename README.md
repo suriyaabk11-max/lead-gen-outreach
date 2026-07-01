@@ -1,8 +1,9 @@
 # Outreach Sequencer
 
 Upload a lead list, and each lead is automatically enrolled in a 5-email
-outreach sequence sent over ~2.5 months. Built with plain Node.js/Express,
-a JSON file store (no database setup required), and Resend for sending.
+outreach sequence sent over ~7.5 weeks (52 days). Built with plain
+Node.js/Express, a JSON file store (no database setup required), and Resend
+for sending.
 
 Default sequence (fully editable in the app):
 
@@ -40,6 +41,18 @@ before turning dry run off.
 4. In the app's **Settings** tab, turn off Dry Run once you're confident
    the copy and timing are right.
 
+**Protect the app before you flip Dry Run off.** There is no login by
+default - anyone with the URL can read/delete your leads or trigger real
+sends. Set `APP_USERNAME` and `APP_PASSWORD` (locally in `.env`, or in
+Railway's Variables tab) to put a login prompt in front of the whole app.
+Leave both unset for local testing.
+
+**Bad addresses stop themselves.** If a send to a lead fails 3 times in a
+row (bad address, bounce, etc.), that lead is marked `bounced` and stops
+retrying automatically instead of hammering Resend every 15 minutes
+forever. Fix the address and hit "Resume" on that lead to give it 3 more
+attempts.
+
 **Deliverability note (important):** sending from a brand-new domain or
 inbox is very likely to land in spam. Warm up your sending domain/inbox
 first (there are warm-up tools you can search for), and consider
@@ -54,7 +67,9 @@ You already have Railway set up, so:
 2. Create a new Railway project from that repo/folder.
 3. In Railway's Variables tab, set: `RESEND_API_KEY`, `FROM_EMAIL`,
    `FROM_NAME`, `APP_URL` (your Railway-provided URL, needed so
-   unsubscribe links work), and `DRY_RUN=true` to start.
+   unsubscribe links work), `DRY_RUN=true` to start, and
+   `APP_USERNAME`/`APP_PASSWORD` to put a login on the app (recommended -
+   see the note above).
 4. Deploy. Railway sets `PORT` automatically.
 
 **Persistence:** lead/log data is stored in `data/db.json` on disk. Railway's

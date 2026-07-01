@@ -12,7 +12,47 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'db.json');
+const MAX_SEND_ATTEMPTS = 3;
 
+// ---------------------------------------------------------------------------
+// Optional Basic Auth gate. This app can dump lead PII and, once dry run is
+// off, send real emails - by default it has zero access control, so anyone
+// with the URL could do either. Set APP_USERNAME + APP_PASSWORD (e.g. in
+// Railway's Variables tab) to require a login. Leave both unset for local
+// dev. The unsubscribe link recipients click from their inbox stays public
+// either way - they have no way to supply credentials.
+// ---------------------------------------------------------------------------
+
+const PUBLIC_PATHS = [/^\/api\/unsubscribe\//, /^\/api\/health$/];
+
+function safeEqual(a, b) {
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
+  if (bufA.length !== bufB.length) {
+    crypto.timingSafeEqual(bufA, bufA); // keep timing consistent either way
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+function basicAuthMiddleware(req, res, next) {
+  if (PUBLIC_PATHS.some((re) => re.test(req.path))) return next();
+  const user = process.env.APP_USERNAME;
+  const pass = process.env.APP_PASSWORD;
+  if (!user || !pass) return next(); // auth disabled unless both are set
+  const header = req.headers.authorization || '';
+  if (header.startsWith('Basic ')) {
+    const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
+    const sep = decoded.indexOf(':');
+    const reqUser = sep === -1 ? decoded : decoded.slice(0, sep);
+    const reqPass = sep === -1 ? '' : decoded.slice(sep + 1);
+    if (safeEqual(reqUser, user) && safeEqual(reqPass, pass)) return next();
+  }
+  res.set('WWW-Authenticate', 'Basic realm="Outreach Sequencer"');
+  return res.status(401).send('Authentication required.');
+}
+
+app.use(basicAuthMiddleware);
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -210,12 +250,20 @@ async function processLead(db, lead) {
   if (db.logs.length > 2000) db.logs.length = 2000;
 
   if (result.status === 'failed') {
-    // leave the lead active with the same nextSendAt so it retries next tick
+    lead.failCount = (lead.failCount || 0) + 1;
+    if (lead.failCount >= MAX_SEND_ATTEMPTS) {
+      // stop hammering Resend for a permanently-broken address; surface it
+      // so it can be fixed and manually resumed instead of retrying forever
+      lead.status = 'bounced';
+      lead.nextSendAt = null;
+    }
+    // otherwise leave the lead active with the same nextSendAt so it retries next tick
     return lead;
   }
 
   lead.currentStage = stepNumber;
   lead.lastSentAt = new Date().toISOString();
+  lead.failCount = 0;
 
   const nextStep = db.sequenceSteps.find((s) => s.stepNumber === stepNumber + 1 && s.enabled);
   if (nextStep) {
@@ -280,6 +328,7 @@ function newLeadRecord({ name, company, email, phone, website }) {
     website: website || '',
     status: 'active',
     currentStage: 0,
+    failCount: 0,
     nextSendAt: now,
     createdAt: now,
     lastSentAt: null,
@@ -363,6 +412,7 @@ app.post('/api/leads/:id/resume', (req, res) => {
   const lead = db.leads.find((l) => l.id === req.params.id);
   if (!lead) return res.status(404).json({ error: 'Not found' });
   lead.status = 'active';
+  lead.failCount = 0;
   if (!lead.nextSendAt || new Date(lead.nextSendAt).getTime() < Date.now()) {
     lead.nextSendAt = new Date().toISOString();
   }
@@ -514,7 +564,12 @@ cron.schedule('*/15 * * * *', () => {
 });
 
 app.listen(PORT, () => {
-  loadDb(); // ensure data file exists on boot
+  const db = loadDb(); // ensure data file exists on boot
   console.log(`Lead outreach app running on port ${PORT}`);
-  console.log(`Dry run mode: ${loadDb().settings.dryRun ? 'ON (no real emails will send)' : 'OFF (real emails will send)'}`);
+  console.log(`Dry run mode: ${db.settings.dryRun ? 'ON (no real emails will send)' : 'OFF (real emails will send)'}`);
+  if (process.env.APP_USERNAME && process.env.APP_PASSWORD) {
+    console.log('Basic auth: ON');
+  } else {
+    console.log('Basic auth: OFF (set APP_USERNAME + APP_PASSWORD to require a login)');
+  }
 });

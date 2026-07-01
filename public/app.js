@@ -44,7 +44,7 @@ async function loadLeads() {
         <td>${l.status === 'active' ? fmtDate(l.nextSendAt) : '—'}</td>
         <td class="row-actions">
           ${l.status === 'active' ? `<button onclick="leadAction('${l.id}','pause')">Pause</button>` : ''}
-          ${l.status === 'paused' ? `<button onclick="leadAction('${l.id}','resume')">Resume</button>` : ''}
+          ${l.status === 'paused' || l.status === 'bounced' ? `<button onclick="leadAction('${l.id}','resume')">Resume</button>` : ''}
           ${l.status !== 'unsubscribed' ? `<button onclick="leadAction('${l.id}','mark-replied')">Mark replied</button>` : ''}
           <button class="danger" onclick="deleteLead('${l.id}')">Delete</button>
         </td>
