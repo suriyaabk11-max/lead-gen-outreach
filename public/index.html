@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Outreach Sequencer</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Outreach Sequencer</div>
+    <div id="dryRunBadge" class="badge">...</div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="leads">Leads</button>
+    <button class="tab-btn" data-tab="sequence">Sequence</button>
+    <button class="tab-btn" data-tab="settings">Settings</button>
+    <button class="tab-btn" data-tab="logs">Logs</button>
+  </nav>
+
+  <main>
+    <!-- LEADS TAB -->
+    <section id="tab-leads" class="tab-panel active">
+      <div class="panel-header">
+        <h2>Leads</h2>
+        <div class="actions">
+          <label class="btn secondary file-btn">
+            Upload CSV
+            <input type="file" id="csvFile" accept=".csv" hidden />
+          </label>
+          <button class="btn" id="btnShowAddLead">+ Add lead</button>
+          <button class="btn secondary" id="btnRunScheduler">Run scheduler now</button>
+        </div>
+      </div>
+      <p class="hint">CSV columns recognized: name, company, email, phone, website (header names are flexible).</p>
+      <div id="uploadResult" class="notice" style="display:none"></div>
+
+      <div id="addLeadForm" class="card" style="display:none">
+        <h3>Add a lead</h3>
+        <div class="grid">
+          <input id="f_name" placeholder="Full name" />
+          <input id="f_company" placeholder="Company" />
+          <input id="f_email" placeholder="Email *" />
+          <input id="f_phone" placeholder="Phone" />
+          <input id="f_website" placeholder="Website" />
+        </div>
+        <div class="actions">
+          <button class="btn" id="btnSaveLead">Save & enroll</button>
+          <button class="btn secondary" id="btnCancelLead">Cancel</button>
+        </div>
+      </div>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Name</th><th>Company</th><th>Email</th><th>Status</th>
+            <th>Stage</th><th>Next send</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="leadsBody"></tbody>
+      </table>
+    </section>
+
+    <!-- SEQUENCE TAB -->
+    <section id="tab-sequence" class="tab-panel">
+      <div class="panel-header"><h2>Email sequence</h2></div>
+      <p class="hint">Placeholders available: <code>{{first_name}}</code>, <code>{{name}}</code>, <code>{{company}}</code>, <code>{{website}}</code>. An unsubscribe link is appended to every email automatically.</p>
+      <div id="sequenceList"></div>
+    </section>
+
+    <!-- SETTINGS TAB -->
+    <section id="tab-settings" class="tab-panel">
+      <div class="panel-header"><h2>Settings</h2></div>
+      <div class="card">
+        <label class="switch-row">
+          <input type="checkbox" id="dryRunToggle" />
+          <span><strong>Dry run mode</strong> — when on, no real emails are sent, everything is just logged. Turn this off only once you've verified your Resend setup and previewed every step.</span>
+        </label>
+        <div class="grid" style="margin-top:16px">
+          <div>
+            <label class="small-label">From name</label>
+            <input id="s_fromName" />
+          </div>
+          <div>
+            <label class="small-label">From email</label>
+            <input id="s_fromEmail" />
+          </div>
+          <div>
+            <label class="small-label">App URL (used for unsubscribe links)</label>
+            <input id="s_appUrl" />
+          </div>
+        </div>
+        <div class="actions"><button class="btn" id="btnSaveSettings">Save settings</button></div>
+        <p id="resendStatus" class="hint"></p>
+      </div>
+
+      <div class="card">
+        <h3>Send a test email</h3>
+        <div class="grid">
+          <input id="testTo" placeholder="you@yourdomain.com" />
+          <label class="switch-row" style="margin:0">
+            <input type="checkbox" id="testForce" />
+            <span>Force real send (bypass dry run for this test only)</span>
+          </label>
+        </div>
+        <div class="actions"><button class="btn" id="btnTestSend">Send test</button></div>
+        <p id="testResult" class="hint"></p>
+      </div>
+    </section>
+
+    <!-- LOGS TAB -->
+    <section id="tab-logs" class="tab-panel">
+      <div class="panel-header"><h2>Send logs</h2></div>
+      <table class="table">
+        <thead><tr><th>Sent at</th><th>Lead</th><th>Step</th><th>Subject</th><th>Status</th><th>Error</th></tr></thead>
+        <tbody id="logsBody"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
