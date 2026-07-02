@@ -21,6 +21,7 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
+const emailVerificationService = require('../services/emailVerificationService');
 
 const SEARLO_BASE_URL = 'https://api.searlo.tech/api/v1';
 const USER_AGENT =
@@ -141,7 +142,7 @@ async function scrapeContactInfo(browserPage, websiteUrl) {
 }
 
 function toCsv(rows) {
-  const headers = ['name', 'company', 'email', 'phone', 'website'];
+  const headers = ['name', 'company', 'email', 'phone', 'website', 'email_status'];
   const escape = (v) => `"${String(v || '').replace(/"/g, '""')}"`;
   const lines = [headers.join(',')];
   for (const r of rows) {
@@ -183,11 +184,27 @@ async function main() {
 
   await browser.close();
 
+  console.log(`\nVerifying ${leads.length} scraped email(s) (syntax + mail server + disposable check)...`);
+  const verifications = await emailVerificationService.verifyBatch(leads.map((l) => l.email));
+  let validCount = 0;
+  let riskyCount = 0;
+  const keptLeads = [];
+  for (let i = 0; i < leads.length; i++) {
+    const v = verifications[i];
+    if (v.status === 'invalid') continue; // no mail server, or a disposable domain - not worth keeping
+    keptLeads.push({ ...leads[i], email_status: v.status });
+    if (v.status === 'valid') validCount += 1;
+    else riskyCount += 1;
+  }
+
   const outPath = path.resolve(process.cwd(), args.out);
-  fs.writeFileSync(outPath, toCsv(leads));
-  console.log(`\nDone. ${leads.length} lead(s) with an email written to ${outPath}`);
-  console.log('Emails found this way are unverified - run them through an enrichment/verification');
-  console.log('step before sending, or you risk hurting your sending domain\'s deliverability.');
+  fs.writeFileSync(outPath, toCsv(keptLeads));
+  console.log(`\nDone. ${keptLeads.length} verifiable lead(s) written to ${outPath}`);
+  console.log(`  ${validCount} valid, ${riskyCount} risky (role address like info@ - deliverable, not a named person)`);
+  console.log(`  ${leads.length - keptLeads.length} dropped (no mail server found, or a disposable domain)`);
+  console.log('\nNote: this only confirms the domain accepts mail - it does not confirm the specific');
+  console.log('inbox exists. For higher-confidence verification, run through a paid service (e.g. Clay,');
+  console.log('Apollo, Kickbox) before a large send.');
 }
 
 main().catch((e) => {

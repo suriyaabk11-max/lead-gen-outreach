@@ -360,6 +360,12 @@ model Lead {
   lastSentAt       DateTime?
   unsubscribeToken String    @unique
 
+  // Email verification (syntax + MX + disposable/role-based check, run at
+  // upload time). "risky" = deliverable but a role address (info@, etc);
+  // still enrolled, just a signal for humans reviewing lead quality.
+  emailVerification   String    @default("unverified") // unverified, valid, risky, invalid
+  emailVerifiedAt     DateTime?
+
   // AI relationships
   companyProfile   CompanyProfile?
   websiteAudit     WebsiteAudit?

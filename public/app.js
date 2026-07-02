@@ -23,6 +23,18 @@ function fmtDate(iso) {
     ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
+const VERIFY_TITLES = {
+  valid: 'Deliverable — looks like a real inbox',
+  risky: 'Deliverable, but a role address (info@, support@, etc), not a named person',
+  invalid: 'No mail server found, or a disposable-email domain',
+  unverified: '',
+};
+function verifyBadge(status) {
+  const s = status || 'unverified';
+  if (s === 'unverified') return '';
+  return `<span class="verify-badge verify-${s}" title="${escapeHtml(VERIFY_TITLES[s] || '')}">${s}</span>`;
+}
+
 // ---------- Leads ----------
 async function loadLeads() {
   const res = await fetch('/api/leads');
@@ -39,7 +51,7 @@ async function loadLeads() {
       <tr>
         <td>${escapeHtml(l.name || '—')}</td>
         <td>${escapeHtml(l.company || '—')}</td>
-        <td>${escapeHtml(l.email)}</td>
+        <td>${escapeHtml(l.email)}${verifyBadge(l.emailVerification)}</td>
         <td><span class="status-pill status-${l.status}">${l.status}</span></td>
         <td>${l.currentStage} / 5</td>
         <td>${l.status === 'active' ? fmtDate(l.nextSendAt) : '—'}</td>
@@ -106,7 +118,8 @@ $('#csvFile').addEventListener('change', async (e) => {
   if (!res.ok) {
     box.textContent = data.error || 'Upload failed.';
   } else {
-    box.textContent = `Added ${data.added} lead(s). Skipped ${data.skippedDuplicate} duplicate(s), ${data.skippedNoEmail} row(s) with no valid email. (${data.total} rows in file.)`;
+    const riskyNote = data.addedRisky ? ` (${data.addedRisky} are role addresses like info@ — deliverable but not a named person)` : '';
+    box.textContent = `Added ${data.added} lead(s)${riskyNote}. Skipped ${data.skippedDuplicate} duplicate(s), ${data.skippedNoEmail} row(s) with no valid email, ${data.skippedUnverifiable} unverifiable (no mail server or disposable domain). (${data.total} rows in file.)`;
   }
   e.target.value = '';
   loadLeads();

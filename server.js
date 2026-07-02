@@ -8,6 +8,7 @@ const cron = require('node-cron');
 const { Resend } = require('resend');
 const db = require('./db');
 const aiRoutes = require('./routes/aiRoutes');
+const emailVerificationService = require('./services/emailVerificationService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -213,7 +214,7 @@ function csvRowToLinkedinProspect(row) {
   return out;
 }
 
-function newLeadRecord({ name, company, email, phone, website }) {
+function newLeadRecord({ name, company, email, phone, website }, verification) {
   return {
     name: name || '',
     company: company || '',
@@ -225,6 +226,8 @@ function newLeadRecord({ name, company, email, phone, website }) {
     failCount: 0,
     nextSendAt: new Date(),
     unsubscribeToken: crypto.randomBytes(16).toString('hex'),
+    emailVerification: verification ? verification.status : 'unverified',
+    emailVerifiedAt: verification ? new Date() : null,
   };
 }
 
@@ -239,8 +242,12 @@ app.get('/api/leads', async (req, res) => {
 app.post('/api/leads', async (req, res) => {
   const { name, company, email, phone, website } = req.body || {};
   if (!email || !EMAIL_RE.test(email)) return res.status(400).json({ error: 'A valid email is required.' });
+  const verification = await emailVerificationService.verifyEmail(email);
+  if (verification.status === 'invalid') {
+    return res.status(400).json({ error: 'This email address does not look deliverable (no mail server found, or a known disposable domain).' });
+  }
   try {
-    const lead = await db.createLead(newLeadRecord({ name, company, email, phone, website }));
+    const lead = await db.createLead(newLeadRecord({ name, company, email, phone, website }, verification));
     await processLead(lead);
     res.status(201).json(await db.getLeadById(lead.id));
   } catch (err) {
@@ -265,9 +272,14 @@ app.post('/api/leads/upload', upload.single('file'), async (req, res) => {
   const existingLeads = await db.getLeads();
   const existing = new Set(existingLeads.map((l) => l.email.toLowerCase()));
   let added = 0;
+  let addedRisky = 0;
   let skippedNoEmail = 0;
   let skippedDuplicate = 0;
+  let skippedUnverifiable = 0;
 
+  // Dedupe against the file itself and against existing leads before doing
+  // any DNS lookups, so a CSV full of repeats doesn't waste MX queries.
+  const candidates = [];
   for (const row of rows) {
     const mapped = csvRowToLead(row);
     if (!mapped.email || !EMAIL_RE.test(mapped.email)) {
@@ -280,10 +292,23 @@ app.post('/api/leads/upload', upload.single('file'), async (req, res) => {
       continue;
     }
     existing.add(emailLower);
+    candidates.push(mapped);
+  }
+
+  const verifications = await emailVerificationService.verifyBatch(candidates.map((c) => c.email));
+
+  for (let i = 0; i < candidates.length; i++) {
+    const mapped = candidates[i];
+    const verification = verifications[i];
+    if (verification.status === 'invalid') {
+      skippedUnverifiable += 1;
+      continue;
+    }
     try {
-      const lead = await db.createLead(newLeadRecord(mapped));
+      const lead = await db.createLead(newLeadRecord(mapped, verification));
       await processLead(lead);
       added += 1;
+      if (verification.status === 'risky') addedRisky += 1;
     } catch (err) {
       if (err.code === 'P2002') {
         skippedDuplicate += 1;
@@ -291,7 +316,7 @@ app.post('/api/leads/upload', upload.single('file'), async (req, res) => {
     }
   }
 
-  res.json({ added, skippedNoEmail, skippedDuplicate, total: rows.length });
+  res.json({ added, addedRisky, skippedNoEmail, skippedDuplicate, skippedUnverifiable, total: rows.length });
 });
 
 app.post('/api/leads/:id/pause', async (req, res) => {

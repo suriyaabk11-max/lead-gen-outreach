@@ -157,6 +157,21 @@ input, textarea {
 .status-unsubscribed, .status-bounced { background: #fee2e2; color: var(--red); }
 .status-completed { background: #e5e7eb; color: var(--muted); }
 
+.verify-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+.verify-valid { background: #dcfce7; color: var(--green); }
+.verify-risky { background: #fef3c7; color: var(--amber); }
+.verify-invalid { background: #fee2e2; color: var(--red); }
+.verify-unverified { display: none; }
+
 .row-actions button {
   background: none;
   border: none;
