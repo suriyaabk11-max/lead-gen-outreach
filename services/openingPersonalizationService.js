@@ -1,18 +1,19 @@
 // Generates the two short AI-written lines used in the Step 1 cold email
-// template (a "positive note" and a "personalized observation"). Deliberately
-// separate from aiProviderService.js (the heavier AI Sales OS pipeline,
-// which needs a website crawl first) - this only needs name/company/city/
-// website, so it can run inline right before a send with no crawl required.
-const Anthropic = require('@anthropic-ai/sdk');
+// template (a "positive note" and a "personalized observation"). Uses
+// Gemini (generous free tier - keeps a live campaign cheap) rather than
+// Claude; deliberately separate from aiProviderService.js (the heavier AI
+// Sales OS pipeline, which needs a website crawl first) - this only needs
+// name/company/city/website, so it can run inline right before a send.
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-const MODEL = process.env.AI_MODEL || 'claude-opus-4-1';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 const GENERATION_TIMEOUT_MS = 20000;
 
 let client = null;
-function getClient() {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
-  if (!client) client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  return client;
+function getModel() {
+  if (!process.env.GEMINI_API_KEY) return null;
+  if (!client) client = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  return client.getGenerativeModel({ model: MODEL });
 }
 
 function withTimeout(promise, ms) {
@@ -37,8 +38,8 @@ function fallback(lead) {
 // here must never block or take down the whole send batch - same lesson as
 // the Resend timeout fix.
 async function generateOpeningLines(lead) {
-  const anthropic = getClient();
-  if (!anthropic) return fallback(lead);
+  const model = getModel();
+  if (!model) return fallback(lead);
 
   const prompt = `Write two short lines for a cold outreach email to a business.
 
@@ -47,7 +48,7 @@ Contact name: ${lead.name || 'Unknown'}
 City: ${lead.city || 'Unknown'}
 Website: ${lead.website || 'Unknown'}
 
-Return ONLY valid JSON with these exact keys, no other text:
+Return ONLY valid JSON with these exact keys, no other text, no markdown code fences:
 {
   "positiveNote": "a short (under 15 words) genuine-sounding positive observation about their business, written to fit after 'I noticed you're doing a great job with'",
   "observation": "a short (under 20 words) plausible operational pain point, written to fit after 'One thing I also noticed is that'"
@@ -56,17 +57,9 @@ Return ONLY valid JSON with these exact keys, no other text:
 If you don't have enough real information to say something specific and credible, write something generic but still natural-sounding rather than inventing false specifics.`;
 
   try {
-    const response = await withTimeout(
-      anthropic.messages.create({
-        model: MODEL,
-        max_tokens: 300,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-      GENERATION_TIMEOUT_MS
-    );
-    const content = response.content[0];
-    if (!content || content.type !== 'text') return fallback(lead);
-    const match = content.text.match(/\{[\s\S]*\}/);
+    const result = await withTimeout(model.generateContent(prompt), GENERATION_TIMEOUT_MS);
+    const text = result.response.text();
+    const match = text.match(/\{[\s\S]*\}/);
     if (!match) return fallback(lead);
     const data = JSON.parse(match[0]);
     if (!data.positiveNote || !data.observation) return fallback(lead);

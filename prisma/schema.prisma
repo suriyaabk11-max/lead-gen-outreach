@@ -385,7 +385,7 @@ model Lead {
   // AI-generated opening lines for the Step 1 template ({{positive_note}},
   // {{observation}}) - generated once on first send attempt and cached here,
   // so retries don't re-call the AI. Falls back to generic text if no
-  // ANTHROPIC_API_KEY is set; see services/openingPersonalizationService.js.
+  // GEMINI_API_KEY is set; see services/openingPersonalizationService.js.
   positiveNote     String?
   observation      String?
   personalizedAt   DateTime?
