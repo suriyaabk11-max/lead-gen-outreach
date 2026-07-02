@@ -457,6 +457,9 @@ app.post('/api/sequence/preview', async (req, res) => {
     company: (sample && sample.company) || 'Acme Dental',
     website: (sample && sample.website) || 'acmedental.com',
     email: (sample && sample.email) || 'alex@acmedental.com',
+    city: (sample && sample.city) || 'Melbourne',
+    positiveNote: (sample && sample.positiveNote) || undefined,
+    observation: (sample && sample.observation) || undefined,
     unsubscribeToken: 'preview-token',
   };
   const subject = render(step.subject, fakeLead);
@@ -491,7 +494,7 @@ app.post('/api/settings/test-send', async (req, res) => {
   if (!settings) return res.status(500).json({ error: 'Settings not initialized. Contact administrator.' });
   const sendSettings = force ? { ...settings, dryRun: false } : settings;
   const step = await db.getSequenceStep(1);
-  const fakeLead = { name: 'Alex Morgan', company: 'Acme Dental', email: to, unsubscribeToken: 'preview-token' };
+  const fakeLead = { name: 'Alex Morgan', company: 'Acme Dental', city: 'Melbourne', email: to, unsubscribeToken: 'preview-token' };
   const subject = `[TEST] ${render(step.subject, fakeLead)}`;
   const body = render(step.body, fakeLead) + unsubscribeFooter(settings, fakeLead);
   const result = await sendEmail(sendSettings, { to, subject, text: body });
