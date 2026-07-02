@@ -165,10 +165,20 @@ async function getDueLeads() {
   // scheduler (as opposed to the immediate on-create send, which uses the
   // full Prisma object). That caused those columns to look empty/undefined
   // here even though they had real values in the database.
+  //
+  // "nextSendAt" MUST be quoted: Prisma creates Postgres columns preserving
+  // exact case, but an unquoted identifier gets folded to lowercase by
+  // Postgres, which then doesn't match - this was previously unquoted and
+  // threw `column "nextsendat" does not exist` on every single call. That
+  // means the 15-minute scheduler (which calls this) has never successfully
+  // processed a single due lead since this app existed - every real send
+  // seen so far came from the immediate on-create path (POST /api/leads,
+  // CSV upload), never from a scheduled follow-up. Steps 2-5 of the
+  // sequence were never actually firing automatically until this fix.
   return prisma.$transaction(async (tx) => {
     const leads = await tx.$queryRaw`
       SELECT * FROM "Lead"
-      WHERE status = 'active' AND nextSendAt <= NOW()
+      WHERE status = 'active' AND "nextSendAt" <= NOW()
       FOR UPDATE SKIP LOCKED
     `;
     return leads;
