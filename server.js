@@ -190,17 +190,24 @@ async function processLead(lead) {
   return db.addLogAndUpdateLead(lead.id, logEntry, patch);
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Resend's rate limit is 2 requests/second - without spacing, a batch of due
+// leads fires sends back-to-back and gets 429'd, which counts against those
+// leads' failCount for a reason that has nothing to do with the recipient.
+const RESEND_RATE_LIMIT_DELAY_MS = 600;
+
 async function runDueSends() {
   const dueLeads = await db.getDueLeads();
-  for (const lead of dueLeads) {
+  for (let i = 0; i < dueLeads.length; i++) {
     try {
-      await processLead(lead);
+      await processLead(dueLeads[i]);
     } catch (err) {
       // One lead's DB hiccup or network issue must not stop the rest of the
       // batch from being attempted - it'll just retry this lead next tick,
       // since nextSendAt was never advanced.
-      console.error(`runDueSends: failed to process lead ${lead.id} (${lead.email}):`, err.message);
+      console.error(`runDueSends: failed to process lead ${dueLeads[i].id} (${dueLeads[i].email}):`, err.message);
     }
+    if (i < dueLeads.length - 1) await sleep(RESEND_RATE_LIMIT_DELAY_MS);
   }
   return dueLeads.length;
 }
