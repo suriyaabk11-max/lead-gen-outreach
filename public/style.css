@@ -168,6 +168,14 @@ input, textarea {
   padding: 0;
 }
 .row-actions button.danger { color: var(--red); }
+.row-actions .btn { padding: 4px 10px; font-size: 12px; margin-right: 8px; }
+
+.li-note {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .seq-step {
   background: var(--panel);

@@ -1,0 +1,372 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+
+model SequenceStep {
+  stepNumber Int     @id
+  delayDays  Int
+  enabled    Boolean @default(true)
+  subject    String
+  body       String
+}
+
+model Setting {
+  id        Int     @id @default(1)
+  dryRun    Boolean @default(true)
+  fromName  String  @default("Your Name")
+  fromEmail String  @default("you@yourdomain.com")
+  appUrl    String  @default("http://localhost:3000")
+}
+
+model Log {
+  id         String   @id @default(uuid())
+  leadId     String
+  leadEmail  String
+  stepNumber Int
+  subject    String
+  sentAt     DateTime @default(now())
+  status     String
+  resendId   String?
+  error      String?
+
+  @@index([sentAt])
+}
+
+// LinkedIn outreach is semi-automated by design: this app only drafts and
+// queues connection notes. A human still clicks Connect/Send in their own
+// browser for every prospect - nothing here calls LinkedIn's site or API.
+model LinkedinProspect {
+  id         String    @id @default(uuid())
+  name       String    @default("")
+  profileUrl String
+  company    String    @default("")
+  title      String    @default("")
+  note       String    @default("")
+  status     String    @default("queued") // queued, sent, skipped, replied
+  createdAt  DateTime  @default(now())
+  sentAt     DateTime?
+
+  @@index([status])
+}
+
+model LinkedinTemplate {
+  id   Int    @id @default(1)
+  note String @default("Hi {{first_name}}, noticed {{company}} and would love to connect.")
+}
+
+// ============================================================================
+// AI-POWERED SALES OS MODELS (New in Phase 1+)
+// ============================================================================
+
+// Extracted company data from website crawling
+model CompanyProfile {
+  id                String    @id @default(uuid())
+  leadId            String    @unique
+  lead              Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  // Crawled data
+  companyName       String?
+  description       String?   @db.Text
+  website           String?
+  industryCategory  String?
+  services          String[]  @default([]) // array of service descriptions
+
+  // Contact info extracted from website
+  email             String?
+  phone             String?
+  contactForms      String[]  @default([]) // URLs of contact forms
+
+  // Technology stack
+  techStack         String[]  @default([]) // detected technologies
+  cms               String?   // detected CMS (WordPress, Shopify, etc)
+  frameworks        String[]  @default([]) // detected frameworks
+
+  // Social presence
+  socialLinks       Json?     // { linkedin: url, twitter: url, facebook: url, instagram: url }
+
+  // Features detected
+  hasBookingSystem  Boolean   @default(false)
+  hasPortfolio      Boolean   @default(false)
+  hasBlog           Boolean   @default(false)
+
+  // Crawl metadata
+  crawledAt         DateTime  @default(now())
+  crawlStatus       String    @default("pending") // pending, crawling, completed, failed
+  crawlError        String?
+
+  @@index([leadId])
+  @@index([crawlStatus])
+}
+
+// Website quality audit results
+model WebsiteAudit {
+  id                        String    @id @default(uuid())
+  leadId                    String    @unique
+  lead                      Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  // Mobile responsiveness
+  isMobileResponsive        Boolean?
+
+  // SEO metrics
+  hasMetaTitle              Boolean   @default(false)
+  hasMetaDescription        Boolean   @default(false)
+  metaTitleQuality          Int       @default(0) // 0-100
+  headingStructure          Boolean   @default(false)
+  hasSchemaMarkup           Boolean   @default(false)
+
+  // Performance
+  pageLoadTime              Float?    // seconds
+  coreWebVitalsScore        Int       @default(0) // 0-100
+
+  // Technical
+  isSecure                  Boolean   @default(false) // HTTPS
+  brokenLinksCount          Int       @default(0)
+  errorPagesCount           Int       @default(0)
+  hasRobotsTxt              Boolean   @default(false)
+
+  // Content quality
+  portfolioQuality          Int       @default(0) // 0-100
+  blogQuality               Int       @default(0) // 0-100
+  blogFrequency             String?   // "weekly", "monthly", "rarely", etc
+
+  // Overall score (weighted combination)
+  overallScore              Int       @default(0) // 0-100
+
+  // Raw audit details stored as JSON
+  auditDetails              Json?
+
+  auditedAt                 DateTime  @default(now())
+  auditStatus               String    @default("pending") // pending, auditing, completed, failed
+  auditError                String?
+
+  @@index([leadId])
+  @@index([auditStatus])
+  @@index([overallScore])
+}
+
+// Lead scoring engine output
+model LeadScore {
+  id                    String    @id @default(uuid())
+  leadId                String    @unique
+  lead                  Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  // Overall score
+  overallScore          Int       @default(0) // 0-100
+  qualification         String    @default("cold") // hot, warm, cold
+
+  // Score breakdown (weighted factors)
+  websiteQualityScore   Int       @default(0) // 25% weight
+  completenessScore     Int       @default(0) // 15% weight
+  contactAvailability   Int       @default(0) // 10% weight
+  technologyMaturity    Int       @default(0) // 15% weight
+  socialPresence        Int       @default(0) // 10% weight
+  seoQualityScore       Int       @default(0) // 10% weight
+  icpFitScore           Int       @default(0) // 10% weight
+  contentFreshness      Int       @default(0) // 5% weight
+
+  // Scoring metadata
+  scoredAt              DateTime  @default(now())
+  scoringStatus         String    @default("pending")
+  scoringError          String?
+
+  @@index([leadId])
+  @@index([qualification])
+  @@index([overallScore])
+}
+
+// AI-generated personalization for emails
+model AIPersonalization {
+  id                    String    @id @default(uuid())
+  leadId                String    @unique
+  lead                  Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  // Generated content for email step 1
+  subject               String?   // personalized subject line
+  openingSentence       String?   // personalized hook
+  companySummary        String?   @db.Text // 1-2 sentence description
+  painPoints            String[]  @default([]) // 3-5 detected pain points
+  valueProposition      String?   @db.Text // tailored value prop
+  cta                   String?   // personalized call-to-action
+
+  // Generation metadata
+  generatedAt           DateTime  @default(now())
+  generationStatus      String    @default("pending") // pending, generating, completed, failed
+  generationError       String?
+  tokensUsed            Int       @default(0)
+  estimatedCost         Float     @default(0) // in cents
+  model                 String    @default("claude-opus-4-1")
+
+  @@index([leadId])
+  @@index([generationStatus])
+}
+
+// Track data source for each lead (which provider it came from)
+model LeadSource {
+  id                    String    @id @default(uuid())
+  leadId                String    @unique
+  lead                  Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  provider              String    // "searlo", "csv", "google_search", etc
+  sourceId              String?   // ID from original provider
+  discoveredAt          DateTime  @default(now())
+
+  @@index([provider])
+}
+
+// CRM: Sales opportunities (converted leads)
+model Opportunity {
+  id                    String    @id @default(uuid())
+  leadId                String    @unique
+  lead                  Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  // Pipeline stage
+  stage                 String    @default("discovered") // discovered, qualified, contacted, engaged, opportunity, negotiation, closed_won, closed_lost
+
+  // Opportunity value
+  estimatedValue        Float?    // in dollars
+  currency              String    @default("USD")
+
+  // Sales context
+  salesOwner            String?   // sales person assigned
+  notes                 String?   @db.Text
+
+  // Timeline
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  expectedCloseDate     DateTime?
+  closedAt              DateTime?
+
+  activities            Activity[]
+  notes_relation        Note[]
+  tasks                 Task[]
+
+  @@index([stage])
+  @@index([salesOwner])
+  @@index([estimatedValue])
+}
+
+// Activity timeline (emails sent, replies, calls, etc)
+model Activity {
+  id                    String    @id @default(uuid())
+  opportunityId         String
+  opportunity           Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  type                  String    // "email_sent", "email_opened", "email_replied", "call", "meeting", "note"
+  description           String    @db.Text
+
+  createdAt             DateTime  @default(now())
+
+  @@index([opportunityId])
+  @@index([type])
+}
+
+// CRM Notes
+model Note {
+  id                    String    @id @default(uuid())
+  opportunityId         String
+  opportunity           Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  content               String    @db.Text
+  author                String?   // user who added the note
+
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([opportunityId])
+}
+
+// CRM Tasks
+model Task {
+  id                    String    @id @default(uuid())
+  opportunityId         String
+  opportunity           Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  title                 String
+  description           String?   @db.Text
+  dueDate               DateTime?
+  completed             Boolean   @default(false)
+  completedAt           DateTime?
+  assignedTo            String?
+
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([opportunityId])
+  @@index([dueDate])
+  @@index([completed])
+}
+
+// AI API usage tracking
+model AIUsage {
+  id                    String    @id @default(uuid())
+  service               String    // "claude", "searlo", "google_search"
+  operation             String    // "personalize", "crawl", "audit", "score"
+
+  tokensUsed            Int       @default(0)
+  estimatedCost         Float     @default(0) // in cents
+  success               Boolean   @default(true)
+
+  createdAt             DateTime  @default(now())
+
+  @@index([service])
+  @@index([createdAt])
+}
+
+// Background job tracking
+model BackgroundJob {
+  id                    String    @id @default(uuid())
+  jobType               String    // "crawl_website", "audit_website", "score_lead", "generate_personalization"
+  leadId                String?
+
+  status                String    @default("pending") // pending, processing, completed, failed
+  priority              Int       @default(5) // 1-10, higher = more urgent
+
+  data                  Json?     // job-specific data
+  result                Json?     // result of job execution
+  error                 String?
+
+  retries               Int       @default(0)
+  maxRetries            Int       @default(3)
+
+  createdAt             DateTime  @default(now())
+  startedAt             DateTime?
+  completedAt           DateTime?
+
+  @@index([status])
+  @@index([jobType])
+  @@index([leadId])
+  @@index([priority])
+}
+
+// Update existing Lead model to add relationships
+model Lead {
+  id               String    @id @default(uuid())
+  name             String    @default("")
+  company          String    @default("")
+  email            String    @unique
+  phone            String    @default("")
+  website          String    @default("")
+  status           String    @default("active")
+  currentStage     Int       @default(0)
+  failCount        Int       @default(0)
+  nextSendAt       DateTime?
+  createdAt        DateTime  @default(now())
+  lastSentAt       DateTime?
+  unsubscribeToken String    @unique
+
+  // AI relationships
+  companyProfile   CompanyProfile?
+  websiteAudit     WebsiteAudit?
+  leadScore        LeadScore?
+  aiPersonalization AIPersonalization?
+  leadSource       LeadSource?
+  opportunity      Opportunity?
+
+  @@index([status, nextSendAt])
+}

@@ -2,8 +2,7 @@
 
 Upload a lead list, and each lead is automatically enrolled in a 5-email
 outreach sequence sent over ~7.5 weeks (52 days). Built with plain
-Node.js/Express, a JSON file store (no database setup required), and Resend
-for sending.
+Node.js/Express, Postgres (via Prisma), and Resend for sending.
 
 Default sequence (fully editable in the app):
 
@@ -21,9 +20,14 @@ businesses (the example from the source video). Rewrite it in the
 
 ## Run it locally
 
+Needs a Postgres database. Point `DATABASE_URL` in `.env` at any Postgres
+instance (self-hosted, Supabase, Neon, Railway's Postgres plugin, etc).
+
 ```bash
 npm install
 cp .env.example .env
+# edit .env: set DATABASE_URL to your Postgres connection string
+npm run db:push   # creates the tables
 npm start
 ```
 
@@ -72,13 +76,12 @@ You already have Railway set up, so:
    see the note above).
 4. Deploy. Railway sets `PORT` automatically.
 
-**Persistence:** lead/log data is stored in `data/db.json` on disk. Railway's
-filesystem is reset on every redeploy unless you attach a
-[Railway volume](https://docs.railway.com/reference/volumes) mounted at
-`/app/data` in this project. Attach one before you rely on this in
-production, otherwise a redeploy will wipe your lead list. For heavier
-use, swap the storage functions in `server.js` (`loadDb`/`saveDb`) for a
-real database like Postgres.
+**Persistence:** lead/log data lives in Postgres, not on the app's own disk,
+so redeploys are safe regardless of where you host the app. Set
+`DATABASE_URL` in Railway's Variables tab to a Postgres instance (Railway's
+own Postgres plugin, Supabase, Neon, or a self-hosted instance), then run
+`npm run db:push` once (locally, pointed at the production `DATABASE_URL`)
+to create the tables before the app's first boot.
 
 ## How it works
 
@@ -91,6 +94,16 @@ real database like Postgres.
   `{{name}}`, `{{company}}`, `{{website}}`. An unsubscribe link is
   appended to every email automatically — you don't need to add one
   yourself.
+- **LinkedIn tab** — semi-automated connection outreach. Add prospects
+  manually or via CSV (columns: name, company, title, profileUrl), edit
+  the note template (placeholders: `{{first_name}}`, `{{name}}`,
+  `{{company}}`, `{{title}}`; LinkedIn caps notes at 300 characters), then
+  for each prospect: open their profile, copy the drafted note, paste it
+  into LinkedIn's own Connect dialog, and click Connect yourself. Mark it
+  "sent" afterward. **This app never contacts linkedin.com or automates
+  any action there** — every connection request is sent by you, by hand,
+  which is what keeps this free of LinkedIn's automation-detection/ban
+  risk (full automation, even throttled, still gets accounts restricted).
 - **Settings tab** — toggle dry run, set your from name/email/app URL,
   and send yourself a test email.
 - **Logs tab** — every send attempt (or dry-run) with status and any
@@ -101,17 +114,33 @@ real database like Postgres.
 
 ## Finding leads to upload
 
-This app only handles the outreach side. For sourcing and enriching
-leads:
+This app only handles the outreach side. For sourcing leads, there are two
+options:
 
-- A general web search/scraping approach (e.g. via an AI coding
-  assistant) works reasonably well for businesses that are easy to find
-  online (e.g. "dentists in Melbourne"), but emails found this way
-  should be verified before sending — unverified addresses are the
-  fastest way to tank your sender reputation.
-- Dedicated lead databases/enrichment tools (e.g. Clay, or the data
-  providers it connects to) generally return faster, more verified
-  results, especially for niche audiences that aren't well indexed
-  online.
+### `scripts/scrape-leads.js`
 
-Either way, export to CSV and use the upload button in the Leads tab.
+Finds businesses via the [Searlo](https://searlo.tech) Google SERP API
+(not by scraping Google's HTML directly — that gets blocked almost
+immediately), then visits each business's own website to look for a
+public contact email and phone number.
+
+```bash
+# add SEARLO_API_KEY to .env first (get one at https://searlo.tech)
+node scripts/scrape-leads.js "dentists in Melbourne" --count 50 --out leads.csv
+```
+
+Options: `--count` (how many leads to try to find, default 20), `--out`
+(CSV path, default `leads.csv`), `--delay` (ms between site visits, default
+2000). Upload the resulting CSV in the Leads tab.
+
+**Emails found this way are unverified** — the script only finds an
+address that's publicly listed on the business's own site, it doesn't
+confirm it's deliverable. Run the list through an enrichment/verification
+step before sending, or you risk tanking your sender reputation.
+
+### Dedicated lead databases (Clay, etc.)
+
+Tools like [Clay](https://clay.com) (and the 150+ data providers it
+connects to, e.g. Open Mat) generally return faster, pre-verified results,
+especially for niche audiences that aren't well indexed on the web.
+Export to CSV and upload the same way.

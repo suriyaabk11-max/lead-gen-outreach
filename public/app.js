@@ -10,6 +10,7 @@ $$('.tab-btn').forEach((btn) => {
     $(`#tab-${btn.dataset.tab}`).classList.add('active');
     if (btn.dataset.tab === 'leads') loadLeads();
     if (btn.dataset.tab === 'sequence') loadSequence();
+    if (btn.dataset.tab === 'linkedin') { loadLiTemplate(); loadProspects(); }
     if (btn.dataset.tab === 'settings') loadSettings();
     if (btn.dataset.tab === 'logs') loadLogs();
   });
@@ -183,6 +184,142 @@ async function previewStep(stepNumber) {
   box.style.display = 'block';
   box.textContent = `Subject: ${rendered.subject}\n\n${rendered.body}`;
 }
+
+// ---------- LinkedIn (semi-automated: this app never touches linkedin.com) ----------
+const LI_NOTE_LIMIT = 300;
+
+async function loadLiTemplate() {
+  const res = await fetch('/api/linkedin/template');
+  const t = await res.json();
+  $('#li_template').value = t.note || '';
+  updateLiCount();
+}
+
+function updateLiCount() {
+  const len = $('#li_template').value.length;
+  const el = $('#li_templateCount');
+  el.textContent = `${len} / ${LI_NOTE_LIMIT} characters`;
+  el.style.color = len > LI_NOTE_LIMIT ? '#dc2626' : '#6b7280';
+}
+
+$('#li_template').addEventListener('input', updateLiCount);
+
+$('#btnSaveLiTemplate').addEventListener('click', async () => {
+  await fetch('/api/linkedin/template', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: $('#li_template').value }),
+  });
+  alert('Template saved.');
+});
+
+$('#btnPreviewLiTemplate').addEventListener('click', async () => {
+  await fetch('/api/linkedin/template', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: $('#li_template').value }),
+  });
+  const res = await fetch('/api/linkedin/template/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sample: {} }),
+  });
+  const data = await res.json();
+  const box = $('#li_templatePreview');
+  box.style.display = 'block';
+  box.textContent = `${data.note}\n\n(${data.length} / ${LI_NOTE_LIMIT} characters${data.overLimit ? ' — OVER LIMIT' : ''})`;
+});
+
+async function loadProspects() {
+  const res = await fetch('/api/linkedin/prospects');
+  const prospects = await res.json();
+  const body = $('#prospectsBody');
+  if (prospects.length === 0) {
+    body.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#6b7280;padding:24px">No prospects yet — upload a CSV or add one manually.</td></tr>`;
+    return;
+  }
+  body.innerHTML = prospects
+    .map((p) => `
+      <tr>
+        <td>${escapeHtml(p.name || '—')}</td>
+        <td>${escapeHtml(p.company || '—')}</td>
+        <td>${escapeHtml(p.title || '—')}</td>
+        <td class="li-note" title="${escapeHtml(p.note)}">${escapeHtml(p.note)}</td>
+        <td><span class="status-pill status-${p.status === 'sent' ? 'completed' : p.status === 'skipped' ? 'unsubscribed' : 'active'}">${p.status}</span></td>
+        <td class="row-actions">
+          <a class="btn secondary" href="${escapeHtml(p.profileUrl)}" target="_blank" rel="noopener noreferrer">Open profile</a>
+          <button onclick="copyNote('${p.id}')">Copy note</button>
+          ${p.status === 'queued' ? `<button onclick="prospectAction('${p.id}','mark-sent')">Mark sent</button>` : ''}
+          ${p.status === 'queued' ? `<button onclick="prospectAction('${p.id}','skip')">Skip</button>` : ''}
+          ${p.status === 'sent' ? `<button onclick="prospectAction('${p.id}','mark-replied')">Mark replied</button>` : ''}
+          <button class="danger" onclick="deleteProspect('${p.id}')">Delete</button>
+        </td>
+      </tr>`)
+    .join('');
+}
+
+async function copyNote(id) {
+  const res = await fetch('/api/linkedin/prospects');
+  const prospects = await res.json();
+  const p = prospects.find((x) => x.id === id);
+  if (!p) return;
+  await navigator.clipboard.writeText(p.note);
+  alert('Note copied. Paste it into LinkedIn\'s connection note field, then click Connect yourself.');
+}
+
+async function prospectAction(id, action) {
+  await fetch(`/api/linkedin/prospects/${id}/${action}`, { method: 'POST' });
+  loadProspects();
+}
+
+async function deleteProspect(id) {
+  if (!confirm('Delete this prospect? This cannot be undone.')) return;
+  await fetch(`/api/linkedin/prospects/${id}`, { method: 'DELETE' });
+  loadProspects();
+}
+
+$('#btnShowAddProspect').addEventListener('click', () => {
+  $('#addProspectForm').style.display = $('#addProspectForm').style.display === 'none' ? 'block' : 'none';
+});
+$('#btnCancelProspect').addEventListener('click', () => { $('#addProspectForm').style.display = 'none'; });
+
+$('#btnSaveProspect').addEventListener('click', async () => {
+  const payload = {
+    name: $('#li_f_name').value.trim(),
+    company: $('#li_f_company').value.trim(),
+    title: $('#li_f_title').value.trim(),
+    profileUrl: $('#li_f_profileUrl').value.trim(),
+  };
+  if (!payload.profileUrl) return alert('LinkedIn profile URL is required.');
+  const res = await fetch('/api/linkedin/prospects', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) return alert(data.error || 'Failed to add prospect.');
+  ['li_f_name', 'li_f_company', 'li_f_title', 'li_f_profileUrl'].forEach((id) => ($(`#${id}`).value = ''));
+  $('#addProspectForm').style.display = 'none';
+  loadProspects();
+});
+
+$('#li_csvFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch('/api/linkedin/prospects/upload', { method: 'POST', body: formData });
+  const data = await res.json();
+  const box = $('#li_uploadResult');
+  box.style.display = 'block';
+  if (!res.ok) {
+    box.textContent = data.error || 'Upload failed.';
+  } else {
+    box.textContent = `Added ${data.added} prospect(s). Skipped ${data.skippedNoUrl} row(s) with no profile URL. (${data.total} rows in file.)`;
+  }
+  e.target.value = '';
+  loadProspects();
+});
 
 // ---------- Settings ----------
 async function loadSettings() {

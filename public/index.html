@@ -15,6 +15,7 @@
   <nav class="tabs">
     <button class="tab-btn active" data-tab="leads">Leads</button>
     <button class="tab-btn" data-tab="sequence">Sequence</button>
+    <button class="tab-btn" data-tab="linkedin">LinkedIn</button>
     <button class="tab-btn" data-tab="settings">Settings</button>
     <button class="tab-btn" data-tab="logs">Logs</button>
   </nav>
@@ -67,6 +68,67 @@
       <div class="panel-header"><h2>Email sequence</h2></div>
       <p class="hint">Placeholders available: <code>{{first_name}}</code>, <code>{{name}}</code>, <code>{{company}}</code>, <code>{{website}}</code>. An unsubscribe link is appended to every email automatically.</p>
       <div id="sequenceList"></div>
+    </section>
+
+    <!-- LINKEDIN TAB -->
+    <section id="tab-linkedin" class="tab-panel">
+      <div class="panel-header">
+        <h2>LinkedIn outreach (semi-automated)</h2>
+      </div>
+      <p class="hint">
+        This drafts and queues connection notes only — nothing here contacts LinkedIn
+        automatically. For each prospect, open their profile and click Connect/Send
+        yourself, then mark it as sent. That keeps every action human-performed, so
+        there's no automation-detection/ban risk.
+      </p>
+
+      <div class="card">
+        <h3>Connection note template</h3>
+        <p class="hint">Placeholders: <code>{{first_name}}</code>, <code>{{name}}</code>, <code>{{company}}</code>, <code>{{title}}</code>. LinkedIn caps connection notes at 300 characters.</p>
+        <textarea id="li_template" rows="3"></textarea>
+        <div id="li_templateCount" class="hint"></div>
+        <div class="actions" style="margin-top:10px">
+          <button class="btn" id="btnSaveLiTemplate">Save template</button>
+          <button class="btn secondary" id="btnPreviewLiTemplate">Preview</button>
+        </div>
+        <div class="preview-box" id="li_templatePreview" style="display:none"></div>
+      </div>
+
+      <div class="panel-header" style="margin-top:24px">
+        <h3>Prospects</h3>
+        <div class="actions">
+          <label class="btn secondary file-btn">
+            Upload CSV
+            <input type="file" id="li_csvFile" accept=".csv" hidden />
+          </label>
+          <button class="btn" id="btnShowAddProspect">+ Add prospect</button>
+        </div>
+      </div>
+      <p class="hint">CSV columns recognized: name, company, title, profileUrl (header names are flexible).</p>
+      <div id="li_uploadResult" class="notice" style="display:none"></div>
+
+      <div id="addProspectForm" class="card" style="display:none">
+        <h3>Add a prospect</h3>
+        <div class="grid">
+          <input id="li_f_name" placeholder="Full name" />
+          <input id="li_f_company" placeholder="Company" />
+          <input id="li_f_title" placeholder="Job title" />
+          <input id="li_f_profileUrl" placeholder="LinkedIn profile URL *" />
+        </div>
+        <div class="actions">
+          <button class="btn" id="btnSaveProspect">Save & draft note</button>
+          <button class="btn secondary" id="btnCancelProspect">Cancel</button>
+        </div>
+      </div>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Name</th><th>Company</th><th>Title</th><th>Note</th><th>Status</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="prospectsBody"></tbody>
+      </table>
     </section>
 
     <!-- SETTINGS TAB -->
