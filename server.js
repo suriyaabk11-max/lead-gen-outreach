@@ -270,12 +270,14 @@ async function ingestLeadCandidates(candidates) {
   let addedRisky = 0;
   let skippedDuplicate = 0;
   let skippedUnverifiable = 0;
+  const details = []; // per-candidate outcome, used by the lead-finder "show results" view
 
   const deduped = [];
   for (const c of candidates) {
     const emailLower = c.email.toLowerCase();
     if (existing.has(emailLower)) {
       skippedDuplicate += 1;
+      details.push({ ...c, outcome: 'duplicate' });
       continue;
     }
     existing.add(emailLower);
@@ -290,6 +292,7 @@ async function ingestLeadCandidates(candidates) {
     const verification = verifications[i];
     if (verification.status === 'invalid') {
       skippedUnverifiable += 1;
+      details.push({ ...mapped, outcome: 'unverifiable' });
       continue;
     }
     try {
@@ -297,14 +300,18 @@ async function ingestLeadCandidates(candidates) {
       await processLead(lead);
       added += 1;
       if (verification.status === 'risky') addedRisky += 1;
+      details.push({ ...mapped, outcome: verification.status === 'risky' ? 'added_risky' : 'added' });
     } catch (err) {
       if (err.code === 'P2002') {
         skippedDuplicate += 1;
+        details.push({ ...mapped, outcome: 'duplicate' });
+      } else {
+        throw err;
       }
     }
   }
 
-  return { added, addedRisky, skippedDuplicate, skippedUnverifiable };
+  return { added, addedRisky, skippedDuplicate, skippedUnverifiable, details };
 }
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -630,21 +637,38 @@ app.put('/api/lead-finder/config', async (req, res) => {
   res.json(await db.updateLeadFinderConfig(patch));
 });
 
-let leadFinderRunning = false;
+// In-memory only - reset on restart. Powers the "show progress" / "show
+// results" UI; the leads themselves are already durably saved in Postgres
+// by the time this is populated, so losing this on restart costs nothing
+// but the convenience view.
+let leadFinderProgress = { running: false, phase: 'idle', total: 0, visited: 0, found: 0, lastSite: null };
+let lastRunResults = [];
 
 // Runs one lead-finder pass right now, regardless of schedule. Shared by the
 // manual "run now" endpoint and the hourly due-check below.
 async function runLeadFinderNow() {
-  if (leadFinderRunning) return { skipped: 'already running' };
+  if (leadFinderProgress.running) return { skipped: 'already running' };
   const config = await db.getLeadFinderConfig();
   if (!config.query) return { skipped: 'no query configured' };
   if (!process.env.SEARLO_API_KEY) return { skipped: 'SEARLO_API_KEY not set' };
 
-  leadFinderRunning = true;
+  leadFinderProgress = { running: true, phase: 'searching', total: 0, visited: 0, found: 0, lastSite: null };
   try {
     console.log(`Lead finder: searching "${config.query}" for up to ${config.maxPerRun} lead(s)...`);
-    const found = await leadFinderService.findLeads(config.query, config.maxPerRun);
+    const found = await leadFinderService.findLeads(config.query, config.maxPerRun, {
+      onProgress: (p) => {
+        leadFinderProgress = {
+          ...leadFinderProgress,
+          phase: p.phase,
+          total: p.total || leadFinderProgress.total,
+          visited: p.visited || leadFinderProgress.visited,
+          found: p.found ?? leadFinderProgress.found,
+          lastSite: p.site || leadFinderProgress.lastSite,
+        };
+      },
+    });
     const result = await ingestLeadCandidates(found);
+    lastRunResults = result.details;
     await db.updateLeadFinderConfig({
       lastRunAt: new Date(),
       lastRunAdded: result.added,
@@ -657,15 +681,31 @@ async function runLeadFinderNow() {
     console.error('Lead finder run failed:', err.message);
     return { error: err.message };
   } finally {
-    leadFinderRunning = false;
+    leadFinderProgress = { ...leadFinderProgress, running: false, phase: 'idle' };
   }
 }
+
+app.get('/api/lead-finder/progress', (req, res) => {
+  res.json({ ...leadFinderProgress, lastRunResults });
+});
+
+app.get('/api/lead-finder/last-run.csv', (req, res) => {
+  const headers = ['name', 'company', 'email', 'phone', 'website', 'outcome'];
+  const escape = (v) => `"${String(v || '').replace(/"/g, '""')}"`;
+  const lines = [headers.join(',')];
+  for (const r of lastRunResults) {
+    lines.push(headers.map((h) => escape(r[h])).join(','));
+  }
+  res.set('Content-Type', 'text/csv');
+  res.set('Content-Disposition', 'attachment; filename="lead-finder-last-run.csv"');
+  res.send(lines.join('\n'));
+});
 
 app.post('/api/lead-finder/run-now', async (req, res) => {
   const config = await db.getLeadFinderConfig();
   if (!config.query) return res.status(400).json({ error: 'Set a search query first.' });
-  if (leadFinderRunning) return res.status(409).json({ error: 'A lead finder run is already in progress.' });
-  res.status(202).json({ message: 'Lead finder run started. Check /api/lead-finder/config shortly for results.' });
+  if (leadFinderProgress.running) return res.status(409).json({ error: 'A lead finder run is already in progress.' });
+  res.status(202).json({ message: 'Lead finder run started. Poll /api/lead-finder/progress for live status.' });
   runLeadFinderNow().catch((e) => console.error('Lead finder run-now error:', e));
 });
 

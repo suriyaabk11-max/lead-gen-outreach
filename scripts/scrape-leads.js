@@ -63,7 +63,14 @@ async function main() {
   console.log(`Searching for: "${args.query}" (target ${args.count} leads) via Searlo API`);
   const leads = await leadFinderService.findLeads(args.query, args.count, {
     delayMs: args.delay,
-    onProgress: ({ site, found }) => console.log(`  -> ${site}${found ? '' : ' (no email found, skipping)'}`),
+    onProgress: (p) => {
+      if (p.phase === 'searching') console.log('Searching...');
+      else if (p.phase === 'scraping' && p.site) {
+        console.log(`  [${p.visited}/${p.total}] ${p.site}${p.emailFound ? '' : ' (no email found, skipping)'}`);
+      } else if (p.phase === 'scraping') {
+        console.log(`Found ${p.total} candidate business website(s). Visiting each for contact info...`);
+      }
+    },
   });
 
   console.log(`\nVerifying ${leads.length} scraped email(s) (syntax + mail server + disposable check)...`);

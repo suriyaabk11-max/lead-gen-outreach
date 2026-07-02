@@ -162,10 +162,24 @@
         </div>
         <div class="actions">
           <button class="btn" id="btnSaveLeadFinder">Save</button>
-          <button class="btn secondary" id="btnRunLeadFinderNow">Run now</button>
+          <button class="btn secondary" id="btnRunLeadFinderNow">Run finder now</button>
+          <a class="btn secondary" id="btnSaveResults" href="/api/lead-finder/last-run.csv" download style="display:none">Save results (CSV)</a>
         </div>
         <p id="lf_status" class="hint"></p>
+        <div id="lf_progress" class="notice" style="display:none"></div>
       </div>
+
+      <div class="panel-header" style="margin-top:24px">
+        <h3>Last run results</h3>
+      </div>
+      <table class="table">
+        <thead>
+          <tr><th>Company</th><th>Email</th><th>Phone</th><th>Website</th><th>Outcome</th></tr>
+        </thead>
+        <tbody id="lf_resultsBody">
+          <tr><td colspan="5" style="text-align:center;color:#6b7280;padding:24px">No run yet — click "Run finder now" above.</td></tr>
+        </tbody>
+      </table>
     </section>
 
     <!-- SETTINGS TAB -->

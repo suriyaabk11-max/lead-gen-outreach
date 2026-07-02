@@ -1,4 +1,5 @@
 const LeadProviderInterface = require('./leadProviderInterface');
+const { isUsableWebsite } = require('../services/leadFinderService');
 
 class SearloProvider extends LeadProviderInterface {
   constructor(config = {}) {
@@ -26,12 +27,13 @@ class SearloProvider extends LeadProviderInterface {
       }
 
       const data = await response.json();
-      const items = data.items || [];
+      const results = data.organic || []; // Searlo returns { organic: [...] }, not { items: [...] }
 
-      // Extract company websites from search results
+      // Extract company websites from search results, skipping directory/
+      // social sites (Yelp, Reddit, etc) that aren't the business itself.
       const leads = [];
-      for (const item of items) {
-        if (!item.link) continue;
+      for (const item of results) {
+        if (!item.link || !isUsableWebsite(item.link)) continue;
 
         try {
           const url = new URL(item.link);

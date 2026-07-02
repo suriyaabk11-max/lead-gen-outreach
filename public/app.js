@@ -12,6 +12,7 @@ $$('.tab-btn').forEach((btn) => {
     if (btn.dataset.tab === 'sequence') loadSequence();
     if (btn.dataset.tab === 'linkedin') { loadLiTemplate(); loadProspects(); }
     if (btn.dataset.tab === 'leadfinder') loadLeadFinder();
+    else stopLeadFinderPolling();
     if (btn.dataset.tab === 'settings') loadSettings();
     if (btn.dataset.tab === 'logs') loadLogs();
   });
@@ -336,6 +337,15 @@ $('#li_csvFile').addEventListener('change', async (e) => {
 });
 
 // ---------- Lead finder ----------
+let lfPollTimer = null;
+
+function stopLeadFinderPolling() {
+  if (lfPollTimer) {
+    clearTimeout(lfPollTimer);
+    lfPollTimer = null;
+  }
+}
+
 async function loadLeadFinder() {
   const res = await fetch('/api/lead-finder/config');
   const c = await res.json();
@@ -344,6 +354,7 @@ async function loadLeadFinder() {
   $('#lf_maxPerRun').value = c.maxPerRun;
   $('#lf_intervalDays').value = c.intervalDays;
   renderLeadFinderStatus(c);
+  pollLeadFinderProgress(); // picks up an in-progress run (e.g. scheduled) or the last results
 }
 
 function renderLeadFinderStatus(c) {
@@ -355,6 +366,56 @@ function renderLeadFinderStatus(c) {
   }
   if (c.lastRunError) parts.push(`Last error: ${c.lastRunError}`);
   $('#lf_status').textContent = parts.join(' ');
+}
+
+const LF_PHASE_LABEL = { idle: '', searching: 'Searching Searlo...', scraping: 'Visiting sites...', done: 'Finishing up...' };
+
+const LF_OUTCOME_LABEL = {
+  added: 'Added',
+  added_risky: 'Added (risky)',
+  duplicate: 'Duplicate',
+  unverifiable: 'Unverifiable',
+};
+
+function renderLeadFinderResults(results) {
+  const body = $('#lf_resultsBody');
+  if (!results || results.length === 0) {
+    body.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#6b7280;padding:24px">No run yet — click "Run finder now" above.</td></tr>`;
+    $('#btnSaveResults').style.display = 'none';
+    return;
+  }
+  body.innerHTML = results
+    .map(
+      (r) => `<tr>
+        <td>${escapeHtml(r.company || '—')}</td>
+        <td>${escapeHtml(r.email || '—')}</td>
+        <td>${escapeHtml(r.phone || '—')}</td>
+        <td>${escapeHtml(r.website || '—')}</td>
+        <td>${escapeHtml(LF_OUTCOME_LABEL[r.outcome] || r.outcome)}</td>
+      </tr>`
+    )
+    .join('');
+  $('#btnSaveResults').style.display = 'inline-block';
+}
+
+async function pollLeadFinderProgress() {
+  if (lfPollTimer) clearTimeout(lfPollTimer);
+  const res = await fetch('/api/lead-finder/progress');
+  const p = await res.json();
+  renderLeadFinderResults(p.lastRunResults);
+
+  if (p.running) {
+    const progressBox = $('#lf_progress');
+    progressBox.style.display = 'block';
+    if (p.phase === 'scraping' && p.total) {
+      progressBox.textContent = `${LF_PHASE_LABEL[p.phase]} ${p.visited}/${p.total} visited, ${p.found} email(s) found so far${p.lastSite ? ` — last: ${p.lastSite}` : ''}`;
+    } else {
+      progressBox.textContent = LF_PHASE_LABEL[p.phase] || 'Running...';
+    }
+    lfPollTimer = setTimeout(pollLeadFinderProgress, 2000);
+  } else {
+    $('#lf_progress').style.display = 'none';
+  }
 }
 
 $('#btnSaveLeadFinder').addEventListener('click', async () => {
@@ -379,7 +440,7 @@ $('#btnRunLeadFinderNow').addEventListener('click', async () => {
   const res = await fetch('/api/lead-finder/run-now', { method: 'POST' });
   const data = await res.json();
   if (!res.ok) return alert(data.error || 'Could not start run.');
-  $('#lf_status').textContent = 'Run started — this can take a few minutes (visits each site one at a time). Reopen this tab later to see results.';
+  pollLeadFinderProgress();
 });
 
 // ---------- Settings ----------

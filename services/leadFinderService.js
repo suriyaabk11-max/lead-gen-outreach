@@ -10,7 +10,13 @@ const USER_AGENT =
 
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
 const PHONE_RE = /\b(?:\+\d{1,3}[\s.-]?)?\(?\d{2,4}\)?[\s.-]?\d{2,4}[\s.-]?\d{3,4}\b/;
-const BLOCKED_HOST_SUBSTRINGS = ['google.com', 'youtube.com', 'facebook.com', 'yelp.com', 'instagram.com'];
+const BLOCKED_HOST_SUBSTRINGS = [
+  'google.com', 'youtube.com', 'facebook.com', 'yelp.com', 'instagram.com',
+  'linkedin.com', 'reddit.com',
+];
+// Tried in order, on the same domain as the search result, until one yields
+// an email. Homepage is always tried first (added in scrapeContactInfo).
+const CONTACT_PATHS = ['/contact', '/contact-us', '/about', '/about-us'];
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -43,15 +49,17 @@ async function searloSearch(query, page) {
   return res.json();
 }
 
+// Searlo's /search/web returns { organic: [...], nextPage: <number|null>, ... }
+// - NOT the older { items: [...], searchInformation: { hasNextPage } } shape.
 async function collectSearchResultLinks(query, count) {
   const links = new Set();
   let page = 1;
   while (links.size < count && page <= 10) {
     const data = await searloSearch(query, page);
-    const items = data.items || [];
-    if (items.length === 0) break;
+    const results = data.organic || [];
+    if (results.length === 0) break;
 
-    for (const item of items) {
+    for (const item of results) {
       if (!item.link || !isUsableWebsite(item.link)) continue;
       try {
         const u = new URL(item.link);
@@ -62,80 +70,135 @@ async function collectSearchResultLinks(query, count) {
       if (links.size >= count) break;
     }
 
-    if (!data.searchInformation || !data.searchInformation.hasNextPage) break;
+    if (!data.nextPage) break;
     page += 1;
   }
   return Array.from(links).slice(0, count);
 }
 
+// Tries, in order: mailto link, footer text, then whole-page body text.
+// Returns '' if none of those contain a plausible email.
+async function extractEmailFromPage(browserPage) {
+  const mailtoHref = await browserPage
+    .$$eval('a[href^="mailto:"]', (as) => (as[0] ? as[0].getAttribute('href') : null))
+    .catch(() => null);
+  if (mailtoHref) {
+    const email = mailtoHref.replace('mailto:', '').split('?')[0].trim();
+    if (email && EMAIL_RE.test(email)) return email;
+  }
+
+  const footerText = (await browserPage.textContent('footer').catch(() => '')) || '';
+  const footerMatch = footerText.match(EMAIL_RE);
+  if (footerMatch) return footerMatch[0];
+
+  const bodyText = (await browserPage.textContent('body').catch(() => '')) || '';
+  const bodyMatch = bodyText.match(EMAIL_RE);
+  if (bodyMatch) return bodyMatch[0];
+
+  return '';
+}
+
+// Visits the homepage, then /contact, /contact-us, /about, /about-us (in
+// that order) until an email is found, staying on the original domain the
+// whole way (a redirect to a different host - e.g. a parked domain - means
+// skip that page, not follow it). Tolerates timeouts/404s/SSL issues on any
+// single page by moving on to the next candidate; only a failure to load the
+// homepage itself is treated as this site being unreachable.
 async function scrapeContactInfo(browserPage, websiteUrl) {
   const result = { company: '', email: '', phone: '' };
+  let originalHost;
   try {
-    await browserPage.goto(websiteUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
-    result.company = (await browserPage.title()).split(/[-|]/)[0].trim();
-
-    const mailtoHref = await browserPage
-      .$$eval('a[href^="mailto:"]', (as) => (as[0] ? as[0].getAttribute('href') : null))
-      .catch(() => null);
-    const bodyText = (await browserPage.textContent('body').catch(() => '')) || '';
-
-    if (mailtoHref) {
-      result.email = mailtoHref.replace('mailto:', '').split('?')[0].trim();
-    } else {
-      const m = bodyText.match(EMAIL_RE);
-      if (m) result.email = m[0];
-    }
-
-    const p = bodyText.match(PHONE_RE);
-    if (p) result.phone = p[0].trim();
-
-    // If no email on the homepage, try a /contact page once (if it stays on same domain).
-    if (!result.email) {
-      const contactUrl = new URL('/contact', websiteUrl).toString();
-      const originalHost = new URL(websiteUrl).hostname.toLowerCase();
-      try {
-        await browserPage.goto(contactUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-        const finalUrl = browserPage.url();
-        const finalHost = new URL(finalUrl).hostname.toLowerCase();
-        if (finalHost === originalHost) {
-          const contactText = (await browserPage.textContent('body').catch(() => '')) || '';
-          const m2 = contactText.match(EMAIL_RE);
-          if (m2) result.email = m2[0];
-        }
-      } catch {
-        // /contact page doesn't exist or failed to load
-      }
-    }
-  } catch (e) {
-    result.error = e.message;
+    originalHost = new URL(websiteUrl).hostname.toLowerCase();
+  } catch {
+    result.error = 'Invalid website URL';
+    return result;
   }
+
+  const candidatePages = [
+    websiteUrl,
+    ...CONTACT_PATHS.map((p) => {
+      try {
+        return new URL(p, websiteUrl).toString();
+      } catch {
+        return null;
+      }
+    }).filter(Boolean),
+  ];
+
+  for (let i = 0; i < candidatePages.length; i++) {
+    try {
+      await browserPage.goto(candidatePages[i], { waitUntil: 'domcontentloaded', timeout: i === 0 ? 20000 : 15000 });
+    } catch (e) {
+      if (i === 0) {
+        // Homepage itself is unreachable (DNS failure, connection refused,
+        // timeout) - the whole domain is down, no point trying subpaths.
+        result.error = e.message;
+        break;
+      }
+      continue; // this subpath 404s / times out / doesn't exist - try the next one
+    }
+
+    let finalHost;
+    try {
+      finalHost = new URL(browserPage.url()).hostname.toLowerCase();
+    } catch {
+      finalHost = null;
+    }
+    if (finalHost !== originalHost) continue; // redirected off-domain - don't trust this page's content
+
+    if (i === 0) {
+      result.company = (await browserPage.title().catch(() => '')).split(/[-|]/)[0].trim();
+    }
+
+    if (!result.email) {
+      const email = await extractEmailFromPage(browserPage);
+      if (email) result.email = email;
+    }
+    if (!result.phone) {
+      const bodyText = (await browserPage.textContent('body').catch(() => '')) || '';
+      const p = bodyText.match(PHONE_RE);
+      if (p) result.phone = p[0].trim();
+    }
+
+    if (result.email && result.phone) break; // got everything worth having
+  }
+
   return result;
 }
 
 // Searches for `query`, visits up to `count` matching business sites, and
 // returns leads that had a scrapeable contact email (unverified - caller is
 // expected to run these through emailVerificationService before using them).
+// onProgress (optional) is called with { phase: 'searching' }, then
+// { phase: 'scraping', total, visited, found, site, emailFound } per site,
+// then { phase: 'done', total, visited, found }.
 async function findLeads(query, count, { delayMs = 2000, onProgress } = {}) {
+  if (onProgress) onProgress({ phase: 'searching' });
   const websites = await collectSearchResultLinks(query, count);
+  if (onProgress) onProgress({ phase: 'scraping', total: websites.length, visited: 0, found: 0 });
 
   const browser = await chromium.launch({ headless: true });
   try {
-    const context = await browser.newContext({ userAgent: USER_AGENT });
+    const context = await browser.newContext({ userAgent: USER_AGENT, ignoreHTTPSErrors: true });
     const browserPage = await context.newPage();
 
     const leads = [];
-    for (const site of websites) {
+    for (let i = 0; i < websites.length; i++) {
+      const site = websites[i];
       const info = await scrapeContactInfo(browserPage, site);
       if (info.email) {
         leads.push({ name: '', company: info.company, email: info.email, phone: info.phone, website: site });
       }
-      if (onProgress) onProgress({ site, found: !!info.email });
+      if (onProgress) {
+        onProgress({ phase: 'scraping', total: websites.length, visited: i + 1, found: leads.length, site, emailFound: !!info.email });
+      }
       await jitteredDelay(delayMs);
     }
+    if (onProgress) onProgress({ phase: 'done', total: websites.length, visited: websites.length, found: leads.length });
     return leads;
   } finally {
     await browser.close();
   }
 }
 
-module.exports = { findLeads };
+module.exports = { findLeads, isUsableWebsite };
