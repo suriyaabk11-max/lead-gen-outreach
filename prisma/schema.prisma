@@ -60,6 +60,21 @@ model LinkedinTemplate {
   note String @default("Hi {{first_name}}, noticed {{company}} and would love to connect.")
 }
 
+// Scheduled, unattended lead discovery: periodically searches (via Searlo)
+// for businesses matching `query`, visits each site to pull a contact email,
+// verifies it, and enrolls new verified leads straight into the sequence.
+// Off by default - a query must be set and enabled flipped on for it to run.
+model LeadFinderConfig {
+  id           Int       @id @default(1)
+  enabled      Boolean   @default(false)
+  query        String    @default("") // e.g. "insurance brokers in Mumbai"
+  maxPerRun    Int       @default(20)
+  intervalDays Int       @default(7)
+  lastRunAt    DateTime?
+  lastRunAdded Int       @default(0)
+  lastRunError String?
+}
+
 // ============================================================================
 // AI-POWERED SALES OS MODELS (New in Phase 1+)
 // ============================================================================

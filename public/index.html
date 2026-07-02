@@ -16,6 +16,7 @@
     <button class="tab-btn active" data-tab="leads">Leads</button>
     <button class="tab-btn" data-tab="sequence">Sequence</button>
     <button class="tab-btn" data-tab="linkedin">LinkedIn</button>
+    <button class="tab-btn" data-tab="leadfinder">Lead Finder</button>
     <button class="tab-btn" data-tab="settings">Settings</button>
     <button class="tab-btn" data-tab="logs">Logs</button>
   </nav>
@@ -129,6 +130,42 @@
         </thead>
         <tbody id="prospectsBody"></tbody>
       </table>
+    </section>
+
+    <!-- LEAD FINDER TAB -->
+    <section id="tab-leadfinder" class="tab-panel">
+      <div class="panel-header"><h2>Lead finder (automated)</h2></div>
+      <p class="hint">
+        Searches via Searlo for businesses matching your query, visits each site for a
+        contact email, verifies it (syntax + mail server + disposable check), and enrolls
+        new verified leads straight into the sequence. Once enabled, it runs on the
+        schedule below with no manual steps. Requires <code>SEARLO_API_KEY</code> set on the server.
+      </p>
+      <div class="card">
+        <label class="switch-row">
+          <input type="checkbox" id="lf_enabled" />
+          <span><strong>Enabled</strong> — runs automatically on the interval below.</span>
+        </label>
+        <div class="grid" style="margin-top:16px">
+          <div>
+            <label class="small-label">Search query (industry + location)</label>
+            <input id="lf_query" placeholder="e.g. insurance brokers in Mumbai" />
+          </div>
+          <div>
+            <label class="small-label">Leads per run</label>
+            <input id="lf_maxPerRun" type="number" min="1" max="200" />
+          </div>
+          <div>
+            <label class="small-label">Run every (days)</label>
+            <input id="lf_intervalDays" type="number" min="1" max="90" />
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn" id="btnSaveLeadFinder">Save</button>
+          <button class="btn secondary" id="btnRunLeadFinderNow">Run now</button>
+        </div>
+        <p id="lf_status" class="hint"></p>
+      </div>
     </section>
 
     <!-- SETTINGS TAB -->

@@ -9,6 +9,7 @@ const { Resend } = require('resend');
 const db = require('./db');
 const aiRoutes = require('./routes/aiRoutes');
 const emailVerificationService = require('./services/emailVerificationService');
+const leadFinderService = require('./services/leadFinderService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -258,47 +259,34 @@ app.post('/api/leads', async (req, res) => {
   }
 });
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
-
-app.post('/api/leads/upload', upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
-  let rows;
-  try {
-    rows = parseCsv(req.file.buffer.toString('utf8'), { columns: true, skip_empty_lines: true, trim: true });
-  } catch (e) {
-    return res.status(400).json({ error: `Could not parse CSV: ${e.message}` });
-  }
-
+// Shared by CSV upload and the scheduled lead finder: dedupes candidates
+// against existing leads (and each other), verifies remaining emails, then
+// creates + enrolls whichever ones pass. `candidates` items need at least
+// {email}; name/company/phone/website are optional.
+async function ingestLeadCandidates(candidates) {
   const existingLeads = await db.getLeads();
   const existing = new Set(existingLeads.map((l) => l.email.toLowerCase()));
   let added = 0;
   let addedRisky = 0;
-  let skippedNoEmail = 0;
   let skippedDuplicate = 0;
   let skippedUnverifiable = 0;
 
-  // Dedupe against the file itself and against existing leads before doing
-  // any DNS lookups, so a CSV full of repeats doesn't waste MX queries.
-  const candidates = [];
-  for (const row of rows) {
-    const mapped = csvRowToLead(row);
-    if (!mapped.email || !EMAIL_RE.test(mapped.email)) {
-      skippedNoEmail += 1;
-      continue;
-    }
-    const emailLower = mapped.email.toLowerCase();
+  const deduped = [];
+  for (const c of candidates) {
+    const emailLower = c.email.toLowerCase();
     if (existing.has(emailLower)) {
       skippedDuplicate += 1;
       continue;
     }
     existing.add(emailLower);
-    candidates.push(mapped);
+    deduped.push(c);
   }
 
-  const verifications = await emailVerificationService.verifyBatch(candidates.map((c) => c.email));
+  // Dedupe before doing any DNS lookups, so repeats don't waste MX queries.
+  const verifications = await emailVerificationService.verifyBatch(deduped.map((c) => c.email));
 
-  for (let i = 0; i < candidates.length; i++) {
-    const mapped = candidates[i];
+  for (let i = 0; i < deduped.length; i++) {
+    const mapped = deduped[i];
     const verification = verifications[i];
     if (verification.status === 'invalid') {
       skippedUnverifiable += 1;
@@ -315,6 +303,33 @@ app.post('/api/leads/upload', upload.single('file'), async (req, res) => {
       }
     }
   }
+
+  return { added, addedRisky, skippedDuplicate, skippedUnverifiable };
+}
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+app.post('/api/leads/upload', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
+  let rows;
+  try {
+    rows = parseCsv(req.file.buffer.toString('utf8'), { columns: true, skip_empty_lines: true, trim: true });
+  } catch (e) {
+    return res.status(400).json({ error: `Could not parse CSV: ${e.message}` });
+  }
+
+  let skippedNoEmail = 0;
+  const candidates = [];
+  for (const row of rows) {
+    const mapped = csvRowToLead(row);
+    if (!mapped.email || !EMAIL_RE.test(mapped.email)) {
+      skippedNoEmail += 1;
+      continue;
+    }
+    candidates.push(mapped);
+  }
+
+  const { added, addedRisky, skippedDuplicate, skippedUnverifiable } = await ingestLeadCandidates(candidates);
 
   res.json({ added, addedRisky, skippedNoEmail, skippedDuplicate, skippedUnverifiable, total: rows.length });
 });
@@ -591,13 +606,90 @@ app.delete('/api/linkedin/prospects/:id', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Scheduler: check every 15 minutes for leads due their next email
+// Routes: lead finder (scheduled, unattended lead discovery via Searlo)
+// ---------------------------------------------------------------------------
+
+app.get('/api/lead-finder/config', async (req, res) => {
+  res.json(await db.getLeadFinderConfig());
+});
+
+app.put('/api/lead-finder/config', async (req, res) => {
+  const { enabled, query, maxPerRun, intervalDays } = req.body || {};
+  const patch = {};
+  if (enabled !== undefined) patch.enabled = !!enabled;
+  if (query !== undefined) patch.query = String(query).trim();
+  if (maxPerRun !== undefined) patch.maxPerRun = Math.max(1, Math.min(200, Number(maxPerRun) || 20));
+  if (intervalDays !== undefined) patch.intervalDays = Math.max(1, Math.min(90, Number(intervalDays) || 7));
+
+  if (patch.enabled) {
+    const current = await db.getLeadFinderConfig();
+    const resultingQuery = patch.query !== undefined ? patch.query : current.query;
+    if (!resultingQuery) return res.status(400).json({ error: 'Set a search query before enabling the lead finder.' });
+  }
+
+  res.json(await db.updateLeadFinderConfig(patch));
+});
+
+let leadFinderRunning = false;
+
+// Runs one lead-finder pass right now, regardless of schedule. Shared by the
+// manual "run now" endpoint and the hourly due-check below.
+async function runLeadFinderNow() {
+  if (leadFinderRunning) return { skipped: 'already running' };
+  const config = await db.getLeadFinderConfig();
+  if (!config.query) return { skipped: 'no query configured' };
+  if (!process.env.SEARLO_API_KEY) return { skipped: 'SEARLO_API_KEY not set' };
+
+  leadFinderRunning = true;
+  try {
+    console.log(`Lead finder: searching "${config.query}" for up to ${config.maxPerRun} lead(s)...`);
+    const found = await leadFinderService.findLeads(config.query, config.maxPerRun);
+    const result = await ingestLeadCandidates(found);
+    await db.updateLeadFinderConfig({
+      lastRunAt: new Date(),
+      lastRunAdded: result.added,
+      lastRunError: null,
+    });
+    console.log(`Lead finder: found ${found.length}, added ${result.added} (${result.addedRisky} risky), skipped ${result.skippedDuplicate} duplicate + ${result.skippedUnverifiable} unverifiable.`);
+    return { found: found.length, ...result };
+  } catch (err) {
+    await db.updateLeadFinderConfig({ lastRunAt: new Date(), lastRunError: err.message });
+    console.error('Lead finder run failed:', err.message);
+    return { error: err.message };
+  } finally {
+    leadFinderRunning = false;
+  }
+}
+
+app.post('/api/lead-finder/run-now', async (req, res) => {
+  const config = await db.getLeadFinderConfig();
+  if (!config.query) return res.status(400).json({ error: 'Set a search query first.' });
+  if (leadFinderRunning) return res.status(409).json({ error: 'A lead finder run is already in progress.' });
+  res.status(202).json({ message: 'Lead finder run started. Check /api/lead-finder/config shortly for results.' });
+  runLeadFinderNow().catch((e) => console.error('Lead finder run-now error:', e));
+});
+
+// ---------------------------------------------------------------------------
+// Scheduler: check every 15 minutes for leads due their next email; check
+// hourly whether the lead finder is due to run again.
 // ---------------------------------------------------------------------------
 
 cron.schedule('*/15 * * * *', () => {
   runDueSends().then((n) => {
     if (n > 0) console.log(`Scheduler: sent ${n} email(s).`);
   }).catch((e) => console.error('Scheduler error:', e));
+});
+
+cron.schedule('0 * * * *', async () => {
+  try {
+    const config = await db.getLeadFinderConfig();
+    if (!config.enabled || !config.query) return;
+    const dueAt = config.lastRunAt ? new Date(config.lastRunAt).getTime() + config.intervalDays * 86400000 : 0;
+    if (Date.now() < dueAt) return;
+    await runLeadFinderNow();
+  } catch (e) {
+    console.error('Lead finder scheduler error:', e);
+  }
 });
 
 async function start() {

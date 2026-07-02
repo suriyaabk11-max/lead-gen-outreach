@@ -87,6 +87,10 @@ async function ensureSeeded() {
   if (!existingLinkedinTemplate) {
     await prisma.linkedinTemplate.create({ data: { id: 1 } });
   }
+  const existingLeadFinderConfig = await prisma.leadFinderConfig.findUnique({ where: { id: 1 } });
+  if (!existingLeadFinderConfig) {
+    await prisma.leadFinderConfig.create({ data: { id: 1 } });
+  }
 }
 
 function getSettings() {
@@ -218,6 +222,14 @@ function deleteLinkedinProspect(id) {
   return prisma.linkedinProspect.delete({ where: { id } });
 }
 
+function getLeadFinderConfig() {
+  return prisma.leadFinderConfig.findUnique({ where: { id: 1 } });
+}
+
+function updateLeadFinderConfig(patch) {
+  return prisma.leadFinderConfig.update({ where: { id: 1 }, data: patch });
+}
+
 module.exports = {
   prisma,
   ensureSeeded,
@@ -244,4 +256,6 @@ module.exports = {
   createLinkedinProspect,
   updateLinkedinProspect,
   deleteLinkedinProspect,
+  getLeadFinderConfig,
+  updateLeadFinderConfig,
 };

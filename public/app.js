@@ -11,6 +11,7 @@ $$('.tab-btn').forEach((btn) => {
     if (btn.dataset.tab === 'leads') loadLeads();
     if (btn.dataset.tab === 'sequence') loadSequence();
     if (btn.dataset.tab === 'linkedin') { loadLiTemplate(); loadProspects(); }
+    if (btn.dataset.tab === 'leadfinder') loadLeadFinder();
     if (btn.dataset.tab === 'settings') loadSettings();
     if (btn.dataset.tab === 'logs') loadLogs();
   });
@@ -332,6 +333,53 @@ $('#li_csvFile').addEventListener('change', async (e) => {
   }
   e.target.value = '';
   loadProspects();
+});
+
+// ---------- Lead finder ----------
+async function loadLeadFinder() {
+  const res = await fetch('/api/lead-finder/config');
+  const c = await res.json();
+  $('#lf_enabled').checked = c.enabled;
+  $('#lf_query').value = c.query || '';
+  $('#lf_maxPerRun').value = c.maxPerRun;
+  $('#lf_intervalDays').value = c.intervalDays;
+  renderLeadFinderStatus(c);
+}
+
+function renderLeadFinderStatus(c) {
+  const parts = [];
+  if (c.lastRunAt) {
+    parts.push(`Last ran ${fmtDate(c.lastRunAt)} — added ${c.lastRunAdded} lead(s).`);
+  } else {
+    parts.push('Never run yet.');
+  }
+  if (c.lastRunError) parts.push(`Last error: ${c.lastRunError}`);
+  $('#lf_status').textContent = parts.join(' ');
+}
+
+$('#btnSaveLeadFinder').addEventListener('click', async () => {
+  const payload = {
+    enabled: $('#lf_enabled').checked,
+    query: $('#lf_query').value.trim(),
+    maxPerRun: Number($('#lf_maxPerRun').value) || 20,
+    intervalDays: Number($('#lf_intervalDays').value) || 7,
+  };
+  const res = await fetch('/api/lead-finder/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) return alert(data.error || 'Could not save.');
+  renderLeadFinderStatus(data);
+  alert('Lead finder settings saved.');
+});
+
+$('#btnRunLeadFinderNow').addEventListener('click', async () => {
+  const res = await fetch('/api/lead-finder/run-now', { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) return alert(data.error || 'Could not start run.');
+  $('#lf_status').textContent = 'Run started — this can take a few minutes (visits each site one at a time). Reopen this tab later to see results.';
 });
 
 // ---------- Settings ----------
