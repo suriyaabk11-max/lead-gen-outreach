@@ -86,6 +86,15 @@ function getResendClient() {
   return resendClient;
 }
 
+const SEND_TIMEOUT_MS = 15000;
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
+  ]);
+}
+
 async function sendEmail(settings, { to, subject, text }) {
   const dryRun = settings.dryRun || !process.env.RESEND_API_KEY;
   if (dryRun) {
@@ -95,7 +104,10 @@ async function sendEmail(settings, { to, subject, text }) {
   try {
     const client = getResendClient();
     const from = `${settings.fromName} <${settings.fromEmail}>`;
-    const result = await client.emails.send({ from, to, subject, text });
+    // Without a timeout, a single hung Resend call blocks every subsequent
+    // lead in the scheduler's batch loop indefinitely - one slow request
+    // would silently stall the whole send run.
+    const result = await withTimeout(client.emails.send({ from, to, subject, text }), SEND_TIMEOUT_MS, 'Resend send');
     if (result.error) return { status: 'failed', error: result.error.message || String(result.error) };
     return { status: 'sent', resendId: result.data ? result.data.id : undefined };
   } catch (err) {
@@ -165,7 +177,14 @@ async function processLead(lead) {
 async function runDueSends() {
   const dueLeads = await db.getDueLeads();
   for (const lead of dueLeads) {
-    await processLead(lead);
+    try {
+      await processLead(lead);
+    } catch (err) {
+      // One lead's DB hiccup or network issue must not stop the rest of the
+      // batch from being attempted - it'll just retry this lead next tick,
+      // since nextSendAt was never advanced.
+      console.error(`runDueSends: failed to process lead ${lead.id} (${lead.email}):`, err.message);
+    }
   }
   return dueLeads.length;
 }
@@ -470,8 +489,12 @@ app.get('/api/logs', async (req, res) => {
 });
 
 app.post('/api/scheduler/run', async (req, res) => {
-  const processed = await runDueSends();
-  res.json({ processed });
+  try {
+    const processed = await runDueSends();
+    res.json({ processed });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
