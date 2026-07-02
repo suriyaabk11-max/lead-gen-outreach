@@ -7,14 +7,30 @@ const DEFAULT_SEQUENCE = [
     stepNumber: 1,
     delayDays: 0,
     enabled: true,
-    subject: 'missed calls at {{company}}',
+    subject: 'quick question about {{company}}',
     body: `Hey {{first_name}},
 
-Quick question - when {{company}} gets a call during a busy stretch, or after you've closed for the day, what happens to it?
+I came across {{company}} while looking at businesses in {{city}}.
 
-Most local businesses we talk to lose a handful of bookings every week just because nobody picked up in time. We built an AI voice agent that answers every call like a real receptionist, books the appointment straight into your calendar, and never puts anyone on hold.
+I noticed you're doing a great job with {{positive_note}}.
 
-Worth a quick look?`,
+One thing I also noticed is that {{observation}}.
+
+We recently built AI automation that helps businesses reduce manual work like:
+
+- Appointment reminders
+- Customer follow-ups
+- Lead qualification
+- AI Chatbots
+- Quote automation
+
+Usually this saves owners several hours every week.
+
+Would you be open to a quick 10-minute call next week?
+
+Thanks,
+Suriyaa
+Visionary Byte Works`,
   },
   {
     stepNumber: 2,
@@ -142,13 +158,16 @@ function deleteLead(id) {
 }
 
 async function getDueLeads() {
-  // Use row-level locking (SELECT ... FOR UPDATE) to prevent concurrent sends of same lead
+  // Use row-level locking (SELECT ... FOR UPDATE) to prevent concurrent sends of same lead.
+  // SELECT * deliberately - an explicit column list here has already gone
+  // stale twice as Lead gained new columns (emailVerification, city, AI
+  // cache fields), silently dropping them for every lead processed via the
+  // scheduler (as opposed to the immediate on-create send, which uses the
+  // full Prisma object). That caused those columns to look empty/undefined
+  // here even though they had real values in the database.
   return prisma.$transaction(async (tx) => {
-    // Lock due leads for the duration of this transaction
     const leads = await tx.$queryRaw`
-      SELECT id, name, company, email, phone, website, status, currentStage, failCount,
-             nextSendAt, createdAt, lastSentAt, unsubscribeToken
-      FROM "Lead"
+      SELECT * FROM "Lead"
       WHERE status = 'active' AND nextSendAt <= NOW()
       FOR UPDATE SKIP LOCKED
     `;

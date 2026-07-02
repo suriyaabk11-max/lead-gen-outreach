@@ -10,6 +10,7 @@ const db = require('./db');
 const aiRoutes = require('./routes/aiRoutes');
 const emailVerificationService = require('./services/emailVerificationService');
 const leadFinderService = require('./services/leadFinderService');
+const openingPersonalizationService = require('./services/openingPersonalizationService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -70,6 +71,12 @@ function render(template, lead) {
     website: lead.website || '',
     email: lead.email || '',
     title: lead.title || '',
+    city: lead.city || 'your area',
+    // Fallbacks here cover preview/fake leads that never went through
+    // processLead's AI generation step - never leave a raw {{token}} in a
+    // sent email.
+    positive_note: lead.positiveNote || `what you're building at ${lead.company || 'your business'}`,
+    observation: lead.observation || 'there may be room to save time on repetitive day-to-day tasks',
   };
   return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (m, key) => (map[key] !== undefined ? map[key] : m));
 }
@@ -132,6 +139,15 @@ async function processLead(lead) {
   if (!step) {
     // no more enabled steps - sequence finished
     return db.updateLead(lead.id, { status: 'completed', nextSendAt: null });
+  }
+
+  // Generate (once, cached) the AI opening lines used by {{positive_note}}
+  // and {{observation}} in the template. Never blocks/breaks a send - the
+  // service itself always resolves, falling back to generic text on any
+  // failure or timeout.
+  if (!lead.personalizedAt) {
+    const { positiveNote, observation } = await openingPersonalizationService.generateOpeningLines(lead);
+    lead = await db.updateLead(lead.id, { positiveNote, observation, personalizedAt: new Date() });
   }
 
   const subject = render(step.subject, lead);
@@ -205,6 +221,7 @@ const HEADER_MAP = {
   email: 'email', contactemail: 'email', emailaddress: 'email',
   phone: 'phone', phonenumber: 'phone', tel: 'phone',
   website: 'website', url: 'website', site: 'website',
+  city: 'city', town: 'city', location: 'city',
 };
 
 function csvRowToLead(row) {
@@ -234,13 +251,14 @@ function csvRowToLinkedinProspect(row) {
   return out;
 }
 
-function newLeadRecord({ name, company, email, phone, website }, verification) {
+function newLeadRecord({ name, company, email, phone, website, city }, verification) {
   return {
     name: name || '',
     company: company || '',
     email,
     phone: phone || '',
     website: website || '',
+    city: city || '',
     status: 'active',
     currentStage: 0,
     failCount: 0,
@@ -260,14 +278,14 @@ app.get('/api/leads', async (req, res) => {
 });
 
 app.post('/api/leads', async (req, res) => {
-  const { name, company, email, phone, website } = req.body || {};
+  const { name, company, email, phone, website, city } = req.body || {};
   if (!email || !EMAIL_RE.test(email)) return res.status(400).json({ error: 'A valid email is required.' });
   const verification = await emailVerificationService.verifyEmail(email);
   if (verification.status === 'invalid') {
     return res.status(400).json({ error: 'This email address does not look deliverable (no mail server found, or a known disposable domain).' });
   }
   try {
-    const lead = await db.createLead(newLeadRecord({ name, company, email, phone, website }, verification));
+    const lead = await db.createLead(newLeadRecord({ name, company, email, phone, website, city }, verification));
     await processLead(lead);
     res.status(201).json(await db.getLeadById(lead.id));
   } catch (err) {

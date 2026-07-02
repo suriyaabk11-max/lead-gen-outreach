@@ -94,6 +94,7 @@ $('#btnSaveLead').addEventListener('click', async () => {
     email: $('#f_email').value.trim(),
     phone: $('#f_phone').value.trim(),
     website: $('#f_website').value.trim(),
+    city: $('#f_city').value.trim(),
   };
   if (!payload.email) return alert('Email is required.');
   const res = await fetch('/api/leads', {
@@ -103,7 +104,7 @@ $('#btnSaveLead').addEventListener('click', async () => {
   });
   const data = await res.json();
   if (!res.ok) return alert(data.error || 'Failed to add lead.');
-  ['f_name', 'f_company', 'f_email', 'f_phone', 'f_website'].forEach((id) => ($(`#${id}`).value = ''));
+  ['f_name', 'f_company', 'f_email', 'f_phone', 'f_website', 'f_city'].forEach((id) => ($(`#${id}`).value = ''));
   $('#addLeadForm').style.display = 'none';
   loadLeads();
 });
